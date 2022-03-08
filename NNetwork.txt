@@ -1,0 +1,196 @@
+from vgg_pytorch import VGG
+from sklearn.metrics import confusion_matrix
+from efficientnet_pytorch import EfficientNet
+from sklearn.metrics import precision_score
+
+import numpy as np
+import torchvision
+import torch
+import torchvision.models as models
+import torchvision.transforms as transforms
+import torchvision.datasets as datasets
+import math
+
+from timeit import default_timer as timer
+from datetime import timedelta
+# %%
+
+import random
+
+random.seed(3)
+
+
+# model = EfficientNet.from_pretrained('efficientnet-b4')
+model = models.resnet50(pretrained=True)
+# model = VGG.from_pretrained('vgg11', num_classes=3)
+# model = models.vgg11(pretrained=True)
+
+## resnet fully connected model size and features
+model.fc = torch.nn.Linear(2048, 3)
+
+## efficientnet
+# model.fc = torch.nn.Linear(1000, 3)
+
+## vgg11 classifier
+# num_ftrs = model.classifier[6].in_features
+# model.classifier[6] = torch.nn.Linear(num_ftrs,3)
+print(model)
+
+
+# %%
+
+#bitti
+train_transforms_resnet50 = transforms.Compose([transforms.Resize((224, 224)),
+                                                transforms.ToTensor(),
+                                                transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                                                     std=[0.229, 0.224, 0.225])])
+
+
+train_transforms_vgg11 = transforms.Compose([transforms.Resize(256),
+                                             transforms.CenterCrop(224),
+                                             transforms.ToTensor(),
+                                             transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                                                  std=[0.229, 0.224, 0.225])])
+
+
+train_transforms_effi4 = transforms.Compose([transforms.Resize((224, 224)),
+                                             transforms.ToTensor(),
+                                             transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                                                  std=[0.229, 0.224, 0.225])])
+
+
+dataset = datasets.ImageFolder('./dataset', transform=train_transforms_resnet50)
+
+dataset_boyutu = len(dataset)
+
+egitim_boyutu = int(dataset_boyutu * 0.80)
+
+test_boyutu = dataset_boyutu - egitim_boyutu
+
+egitim_dataset, test_dataset = torch.utils.data.random_split(
+    dataset, [egitim_boyutu, test_boyutu])
+
+print('Dataset boyutu: ', len(dataset))
+
+# %%
+
+batchSize = 32
+
+egitim_loader = torch.utils.data.DataLoader(egitim_dataset,
+                                            batch_size=batchSize,
+                                            shuffle=True)
+
+test_loader = torch.utils.data.DataLoader(test_dataset,
+                                          batch_size=batchSize,
+                                          shuffle=False)
+# %%
+
+# time start
+start = timer()
+
+torch.cuda.empty_cache()
+
+criterion = torch.nn.CrossEntropyLoss()
+optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+print(optimizer)
+
+total_epoch = 15
+model = model.cuda().train()
+
+iterx = 0
+iterTotal = 0
+for epoch in range(total_epoch):
+    running_loss = 0
+    iterx = 0
+    for X, y in egitim_loader:
+
+        optimizer.zero_grad()
+
+        X = X.cuda()
+        y = y.cuda()
+
+        cikti = model(X)
+
+        #y = y.unsqueeze(1).long()
+
+        loss = criterion(cikti, y)
+
+        loss.backward()
+
+        optimizer.step()
+
+        running_loss += loss.data
+        iterx += 1
+        iterTotal += 1
+        print('%' + str(iterTotal*100/((math.ceil(len(egitim_dataset)/batchSize))*total_epoch)) ,str(epoch + 1) + '-' + str(total_epoch) + ':' + str(iterx) + '/' + str(math.ceil(len(egitim_dataset)/batchSize)) +
+              ' : loss: ' + str(running_loss))
+        
+end = timer()
+print('time: ', timedelta(seconds=end-start))
+# %%
+dogru = 0
+toplam = 0
+# test prosedürü
+pre_vect = np.array([])
+gnd_vect = np.array([])
+
+with torch.no_grad():
+    for X, y in test_loader:
+        X = X.cuda()
+        y = y.cuda()
+
+        cikti = model(X)
+
+        _, maksimum = torch.max(cikti.data, 1)
+
+        pre_ = maksimum.detach().cpu().numpy()
+        gnd_ = y.detach().cpu().numpy()
+
+        pre_vect = np.r_[pre_vect, pre_]
+        gnd_vect = np.r_[gnd_vect, gnd_]
+        
+
+        toplam += y.size(0)
+
+        dogru += (maksimum == y).sum().item()
+
+print(epoch, running_loss, '  accuracy: ',  str(dogru) + '/' + str(toplam), '  %' + str(100 * dogru/toplam))
+
+
+CM = confusion_matrix(gnd_vect, pre_vect)
+
+print(CM)
+
+# %%
+
+# CM = np.array([[206, 8, 21],
+#                [3, 208, 11],
+#                [14,6 ,853]])
+
+
+
+
+def statconf(CM):
+    
+    tot_sample  = np.sum(CM)
+    L = len(CM)
+    
+    acc = np.trace(CM) / tot_sample
+    pre = np.zeros(L)
+    rcl = np.zeros(L)
+    f1s = np.zeros(L)
+    
+    for i in range(len(CM)):
+        pre[i] = CM[i,i]/np.sum(CM[:,i])
+        rcl[i] = CM[i,i]/np.sum(CM[i,:])
+        
+        f1s[i] = 2*pre[i]*rcl[i] / ( pre[i] + rcl[i] )
+        
+    
+    return (acc , np.mean(pre) , np.mean(rcl) , np.mean(f1s))
+
+xc = statconf(CM)
+
+ 
+print("\n\n ACC : {:.4f} , PRE : {:.4f} , RCL : {:.4f} , F1S : {:.4f}".format( xc[0] , xc[1] , xc[2] ,  xc[3]))
+
